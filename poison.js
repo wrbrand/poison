@@ -45,10 +45,15 @@ getmac(function(err, macAddr) {
       console.log("Starting interval");
       setInterval(spoofBothWays, interval, target1, target2, macAddr);
     }
-    spoofBothWays(target1, target2, macAddr);
-  }
 
-  process.exit();
+    spoofBothWays(target1, target2, macAddr);
+
+    if(interval === null) {
+      process.exit();
+    } else {
+      // Stick around for the interval
+    }
+  }
 });
 
 var spoofBothWays = (target1, target2, mac) => {
