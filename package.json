@@ -6,7 +6,8 @@
   "dependencies": {
     "cap": "0.1.1",
     "ip": "1.0.2",
-    "getmac": "1.0.7"
+    "getmac": "1.0.7",
+    "q": "1.4.1"
   },
   "repository": {
     "type": "git",
