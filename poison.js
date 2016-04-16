@@ -136,7 +136,7 @@ var arpRequest = function(target, next) {
   var c = new Cap();
   var packet = createARPPacket();
   
-packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
+  packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
 
   packet.arp.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.arp.target_mac.length);
   packet.eth.target_mac.writeUIntBE(0xFFFFFFFFFFFF, 0, packet.eth.target_mac.length);
@@ -153,15 +153,12 @@ packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
   console.log("Sending ARP Request for ", target.ip);
   
   c.on("packet", (nbytes) => {
-    console.log("Packet received");
-
     var response = createARPPacket(socketBuffer.slice(0, nbytes));
 
     if(response.arp.operation.readInt16BE(0) === OPERATION.REPLY) {
       var mac = buf2macString(response.arp.sender_mac);
       var senderIp = buf2ipString(response.arp.sender_ip);
 
-      console.log(mac + " at " + senderIp);
       if(typeof mac !== "undefined" && senderIp === target.ip) {
         c.close();
         next(mac);
@@ -171,6 +168,8 @@ packet.arp.operation.writeUIntBE(OPERATION.REQUEST, 0, 2);
     } else {
     }
   });
+
+  c.send(packet.buffer, packet.buffer.length);
 };
 
 var send = function(buffer) {
